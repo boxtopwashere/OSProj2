@@ -19,17 +19,22 @@ static free_block *HEAD = NULL; /**< Pointer to the first element of the free li
  * @return A pointer to the first block or NULL if the block cannot be split
  */
 void *split(free_block *block, int size) {
-    if((block->size < size + sizeof(free_block))) {
-        return NULL;
+    // Ensure the block is large enough to split
+    if (block->size < size + sizeof(free_block)) {
+        return NULL; // Not enough space to split
     }
 
+    // Calculate the address for the new block
     void *split_pnt = (char *)block + size + sizeof(free_block);
-    free_block *new_block = (free_block *) split_pnt;
+    free_block *new_block = (free_block *)split_pnt;
 
+    // Update the new block's properties
     new_block->size = block->size - size - sizeof(free_block);
     new_block->next = block->next;
 
+    // Update the original block's properties
     block->size = size;
+    block->next = new_block;
 
     return block;
 }
@@ -138,10 +143,9 @@ void *coalesce(free_block *block) {
  * @return A pointer to the allocated memory
  */
 void *do_alloc(size_t size) {
-    void *ptr = sbrk(size + sizeof(free_block));
+    void *ptr = sbrk(size + sizeof(free_block) + sizeof(int));
     if (ptr == (void *)-1) {
-        return NULL; // Allocation failed
-    }
+        return NULL; 
     free_block *block = (free_block *)ptr;
     block->size = size;
     block->next = NULL;
@@ -158,26 +162,61 @@ void *do_alloc(size_t size) {
 void *tumalloc(size_t size) {
     if (HEAD == NULL) {
         free_block *new_block = (free_block *)do_alloc(size);
+        if (new_block == NULL) {
+            fprintf(stderr, "Allocation failed in do_alloc\n");
+            return NULL; // Allocation failed
+        }
+
+        // Write MAGIC_NUMBER
+        *(int *)((char *)new_block + sizeof(free_block) + size) = MAGIC_NUMBER;
+
         return (char *)new_block + sizeof(free_block);
     }
-    free_block *prev = NULL;
+
     free_block *curr = HEAD;
+    free_block *prev = NULL;
+
     while (curr != NULL) {
         if (curr->size >= size) {
-            if (curr->size > size + sizeof(free_block)) {
-                split(curr, size);
+            if (curr->size < size + sizeof(free_block)) {
+                prev = curr;
+                curr = curr->next;
+                continue;
             }
+    
+            free_block *header = (free_block *)split(curr, size);
+    
+            if (header == NULL) {
+                fprintf(stderr, "Split failed in tumalloc\n");
+                return NULL;
+            }
+    
             if (prev != NULL) {
                 prev->next = curr->next;
             } else {
                 HEAD = curr->next;
             }
-            return (char *)curr + sizeof(free_block);
+    
+            header->size = size;
+            *(int *)((char *)header + sizeof(free_block) + size) = MAGIC_NUMBER;
+    
+            return (char *)header + sizeof(free_block);
         }
+    
         prev = curr;
         curr = curr->next;
     }
+
+
     free_block *new_block = (free_block *)do_alloc(size);
+    if (new_block == NULL) {
+        fprintf(stderr, "Allocation failed in do_alloc\n");
+        return NULL; // Allocation failed
+    }
+
+    // Write MAGIC_NUMBER
+    *(int *)((char *)new_block + sizeof(free_block) + size) = MAGIC_NUMBER;
+
     return (char *)new_block + sizeof(free_block);
 }
 
@@ -211,11 +250,11 @@ void *turealloc(void *ptr, size_t new_size) {
     }
     free_block *header = (free_block *)((char *)ptr - sizeof(free_block));
     if (header->size >= new_size) {
-        return ptr; // Already enough space
+        return ptr; 
     }
     void *new_ptr = tumalloc(new_size);
     if (new_ptr == NULL) {
-        return NULL; // Allocation failed
+        return NULL; 
     }
     memcpy(new_ptr, ptr, header->size);
     tufree(ptr);
@@ -232,8 +271,19 @@ void tufree(void *ptr) {
     if (ptr == NULL) {
         return;
     }
-    free_block *block = (free_block *)((char *)ptr - sizeof(free_block));
-    block->next = HEAD;
-    HEAD = block;
-    coalesce(block);
+
+    free_block *header = (free_block *)((char *)ptr - sizeof(free_block));
+
+    
+    if (*(int *)((char *)header + sizeof(free_block) + header->size) == MAGIC_NUMBER) {
+        free_block *free_block_ptr = header;
+        free_block_ptr->size = header->size;
+        free_block_ptr->next = HEAD;
+        HEAD = free_block_ptr;
+
+        coalesce(free_block_ptr);
+    } else {
+        fprintf(stderr, "MEMORY CORRUPTION DETECTED\n");
+        abort();
+    }
 }
