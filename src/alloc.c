@@ -7,6 +7,7 @@
 #include <string.h>
 
 #define ALIGNMENT 16 /**< The alignment of the memory blocks */
+#define MAGIC_NUMBER 0x01234567
 
 static free_block *HEAD = NULL; /**< Pointer to the first element of the free list */
 
@@ -137,8 +138,16 @@ void *coalesce(free_block *block) {
  * @return A pointer to the allocated memory
  */
 void *do_alloc(size_t size) {
-    return NULL;
+    void *ptr = sbrk(size + sizeof(free_block));
+    if (ptr == (void *)-1) {
+        return NULL; // Allocation failed
+    }
+    free_block *block = (free_block *)ptr;
+    block->size = size;
+    block->next = NULL;
+    return block;
 }
+
 
 /**
  * Allocates memory for the end user
@@ -147,8 +156,31 @@ void *do_alloc(size_t size) {
  * @return A pointer to the requested block of memory
  */
 void *tumalloc(size_t size) {
-    return NULL;
+    if (HEAD == NULL) {
+        free_block *new_block = (free_block *)do_alloc(size);
+        return (char *)new_block + sizeof(free_block);
+    }
+    free_block *prev = NULL;
+    free_block *curr = HEAD;
+    while (curr != NULL) {
+        if (curr->size >= size) {
+            if (curr->size > size + sizeof(free_block)) {
+                split(curr, size);
+            }
+            if (prev != NULL) {
+                prev->next = curr->next;
+            } else {
+                HEAD = curr->next;
+            }
+            return (char *)curr + sizeof(free_block);
+        }
+        prev = curr;
+        curr = curr->next;
+    }
+    free_block *new_block = (free_block *)do_alloc(size);
+    return (char *)new_block + sizeof(free_block);
 }
+
 
 /**
  * Allocates and initializes a list of elements for the end user
@@ -158,7 +190,12 @@ void *tumalloc(size_t size) {
  * @return A pointer to the requested block of initialized memory
  */
 void *tucalloc(size_t num, size_t size) {
-    return NULL;
+    size_t total_size = num * size;
+    void *ptr = tumalloc(total_size);
+    if (ptr != NULL) {
+        memset(ptr, 0, total_size);
+    }
+    return ptr;
 }
 
 /**
@@ -169,8 +206,22 @@ void *tucalloc(size_t num, size_t size) {
  * @return A new pointer containing the contents of ptr, but with the new_size
  */
 void *turealloc(void *ptr, size_t new_size) {
-    return NULL;
+    if (ptr == NULL) {
+        return tumalloc(new_size);
+    }
+    free_block *header = (free_block *)((char *)ptr - sizeof(free_block));
+    if (header->size >= new_size) {
+        return ptr; // Already enough space
+    }
+    void *new_ptr = tumalloc(new_size);
+    if (new_ptr == NULL) {
+        return NULL; // Allocation failed
+    }
+    memcpy(new_ptr, ptr, header->size);
+    tufree(ptr);
+    return new_ptr;
 }
+
 
 /**
  * Removes used chunk of memory and returns it to the free list
@@ -178,5 +229,11 @@ void *turealloc(void *ptr, size_t new_size) {
  * @param ptr Pointer to the allocated piece of memory
  */
 void tufree(void *ptr) {
-
+    if (ptr == NULL) {
+        return;
+    }
+    free_block *block = (free_block *)((char *)ptr - sizeof(free_block));
+    block->next = HEAD;
+    HEAD = block;
+    coalesce(block);
 }
